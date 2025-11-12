@@ -1,9 +1,3 @@
-This is a smart move. Solid documentation is the backbone of any complex microservices project. It ensures that when you (or another developer) come back to this code in a month, you know exactly how the pieces fit together.
-
-Here is the complete, professional **Project Documentation** for your Agentic HR platform. You can save this as `README.md` or `DOCUMENTATION.md`.
-
------
-
 # 🤖 Agentic HR: Intelligent Resume Matching Platform
 
 ## 1\. Executive Summary
