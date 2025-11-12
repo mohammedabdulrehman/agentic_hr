@@ -1,0 +1,6 @@
+celery
+pydantic-settings
+sqlalchemy[asyncio]
+psycopg[binary]  # <-- This is the fix
+aiobotocore
+aiohttp

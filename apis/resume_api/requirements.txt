@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+sqlalchemy[asyncio]
+psycopg[binary]  # <-- This is the fix
+celery
+aiobotocore
+python-multipart
+kombu
+aiofiles
+redis

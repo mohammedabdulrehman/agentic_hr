@@ -1,0 +1,8 @@
+celery
+pydantic-settings
+sqlalchemy[asyncio]
+psycopg[binary]  # <-- This is the fix
+# --- AI/LLM Libs ---
+openai
+instructor
+aiohttp # For async OpenAI

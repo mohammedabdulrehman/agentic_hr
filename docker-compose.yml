@@ -1,0 +1,297 @@
+version: "3.9"
+
+services:
+  # ----------------------------------------
+  # Core Infrastructure Services (5)
+  # ----------------------------------------
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: hr_postgres
+    restart: always
+    env_file: ./.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # Use the './data' folder as requested for persistence
+      - ./data/postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # Expose to host for debugging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports: ["6379:6379"]
+    volumes:
+      - ./data/redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: hr_rabbitmq
+    restart: always
+    env_file: ./.env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    ports:
+      - "5672:5672"   # For Celery
+      - "15672:15672" # For the RabbitMQ Management Web UI
+    volumes:
+      - ./data/rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: hr_minio
+    restart: always
+    env_file: ./.env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # For the API
+      - "9001:9001" # For the MinIO Console (Web UI)
+    volumes:
+      - ./data/minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: hr_qdrant
+    restart: always
+    ports:
+      - "6333:6333" # API
+      - "6334:6334" # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  unstructured-api:
+    image: downloads.unstructured.io/unstructured-io/unstructured-api:latest
+    container_name: hr_unstructured_api
+    restart: always
+    ports:
+      - "8001:8000" # Mapped to 8001 to avoid clash with job_api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------
+  # Custom API Services (3)
+  # ----------------------------------------
+
+  job_api:
+    container_name: hr_job_api
+    build:
+      context: .
+      dockerfile: ./apis/job_api/Dockerfile
+    restart: always
+    env_file: ./.env
+    ports:
+      - "${JOB_API_PORT}:8000" # 8000:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  resume_api:
+    container_name: hr_resume_api
+    build:
+      context: .
+      dockerfile: ./apis/resume_api/Dockerfile
+    restart: always
+    env_file: ./.env
+    ports:
+      - "${RESUME_API_PORT}:8001" # 8001:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  match_api:
+    container_name: hr_match_api
+    build:
+      context: .
+      dockerfile: ./apis/match_api/Dockerfile
+    restart: always
+    env_file: ./.env
+    ports:
+      - "${MATCH_API_PORT}:8002" # 8002:8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ----------------------------------------
+  # Custom Worker Services (8)
+  # ----------------------------------------
+
+  # --- Pipeline 1a: Resume Ingestion ---
+  parser_worker:
+    container_name: hr_parser_worker
+    build:
+      context: .
+      dockerfile: ./workers/parser_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_PARSER}
+    depends_on:
+      - rabbitmq
+      - minio
+      - unstructured-api
+
+  embedder_worker:
+    container_name: hr_embedder_worker
+    build:
+      context: .
+      dockerfile: ./workers/embedder_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_EMBEDDER}
+    depends_on:
+      - rabbitmq
+      - postgres
+      - qdrant
+
+  extractor_worker:
+    container_name: hr_extractor_worker
+    build:
+      context: .
+      dockerfile: ./workers/extractor_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_EXTRACTOR}
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  ingestion_aggregator:
+    container_name: hr_ingestion_aggregator
+    build:
+      context: .
+      dockerfile: ./workers/ingestion_aggregator/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_INGESTION_AGGREGATOR}
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  # --- Pipeline 1b: Job Ingestion ---
+  job_embedder_worker:
+    container_name: hr_job_embedder_worker
+    build:
+      context: .
+      dockerfile: ./workers/job_embedder_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_JOB_EMBEDDER}
+    depends_on:
+      - rabbitmq
+      - postgres
+      - qdrant
+
+  # --- Pipeline 2: Scoring Saga ---
+  scoring_engine:
+    container_name: hr_scoring_engine
+    build:
+      context: .
+      dockerfile: ./workers/scoring_engine/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_SCORING_ENGINE} 
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  semantic_scorer_worker:
+    container_name: hr_semantic_scorer
+    build:
+      context: .
+      dockerfile: ./workers/semantic_scorer_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -P prefork -Q ${QUEUE_SEMANTIC_SCORER}
+    depends_on:
+      - rabbitmq
+      - postgres
+      - qdrant
+
+  llm_scorer_worker:
+    container_name: hr_llm_scorer
+    build:
+      context: .
+      dockerfile: ./workers/llm_scorer_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_LLM_SCORER}
+
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  aggregator_worker:
+    container_name: hr_aggregator_worker
+    build:
+      context: .
+      dockerfile: ./workers/aggregator_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_AGGREGATOR}
+    depends_on:
+      - rabbitmq
+      - postgres
+
+  rationale_worker:
+    container_name: hr_rationale_worker
+    build:
+      context: .
+      dockerfile: ./workers/rationale_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    command: celery -A main worker --loglevel=info -Q ${QUEUE_RATIONALE} 
+    depends_on:
+      - rabbitmq
+      - postgres
+  hr_dashboard_aggregator:
+    container_name: hr_dashboard_aggregator
+    command: python -u main.py --loglevel=info   # <-- note the -u flag
+    build:
+      context: .
+      # We'll create this Dockerfile in a moment
+      dockerfile: ./workers/dashboard_worker/Dockerfile
+    restart: always
+    env_file: ./.env
+    depends_on:
+      - rabbitmq
+      - redis
+volumes:
+  qdrant_data:

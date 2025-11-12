@@ -1,0 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+celery
+pydantic-settings
+sqlalchemy[asyncio]
+psycopg[binary]  # <-- This is the fix
+# --- NEW LIBS ---
+qdrant-client[async] # For async communication with Qdrant
+sentence-transformers

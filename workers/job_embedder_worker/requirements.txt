@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+celery
+pydantic-settings
+sqlalchemy[asyncio]
+psycopg[binary]  # <-- This is the fix
+qdrant-client[async]
+sentence-transformers
