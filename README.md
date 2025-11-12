@@ -10,7 +10,7 @@ The system is built for **high concurrency** and **observability**, using an asy
 
 ## 2\. Architecture Overview
 ## 🧭 System Architecture
-![System Architecture](docs/images/Event-Driven Matching Pipeline Architecture.png)
+![System Architecture](docs/images/Event-Driven%20Matching%20Pipeline%20Architecture.png)
 The system follows a **Producer-Consumer** pattern using RabbitMQ as the event bus.
 
 ### Core Technology Stack
